@@ -1,0 +1,599 @@
+const store = {
+  key: 'expense_tracker_data',
+
+  getAll() {
+    return JSON.parse(localStorage.getItem(this.key) || '[]');
+  },
+
+  save(items) {
+    localStorage.setItem(this.key, JSON.stringify(items));
+    this.syncToGitHub(items);
+  },
+
+  create(item) {
+    const items = this.getAll();
+    item.id = Date.now().toString();
+    item.createdAt = new Date().toISOString();
+    items.push(item);
+    this.save(items);
+    return item;
+  },
+
+  update(id, updates) {
+    const items = this.getAll();
+    const index = items.findIndex(i => i.id === id);
+    if (index !== -1) {
+      items[index] = { ...items[index], ...updates, updatedAt: new Date().toISOString() };
+      this.save(items);
+      return items[index];
+    }
+    return null;
+  },
+
+  delete(id) {
+    const items = this.getAll().filter(i => i.id !== id);
+    this.save(items);
+  },
+
+  getById(id) {
+    return this.getAll().find(i => i.id === id);
+  },
+
+  async syncToGitHub(items) {
+    const token = localStorage.getItem('github_token');
+    const username = localStorage.getItem('github_username');
+    if (!token || !username) return;
+
+    try {
+      const url = `https://api.github.com/repos/${username}/yab-vault/contents/expense-tracker/data.json`;
+      let sha;
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) sha = (await res.json()).sha;
+      } catch (e) {}
+
+      await fetch(url, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Update expense data',
+          content: btoa(JSON.stringify(items, null, 2)),
+          sha
+        })
+      });
+    } catch (e) {
+      console.warn('GitHub sync failed:', e);
+    }
+  }
+};
+
+const router = {
+  routes: {},
+
+  init(routes) {
+    this.routes = routes;
+    window.addEventListener('hashchange', () => this.route());
+    this.route();
+  },
+
+  route() {
+    const hash = window.location.hash.slice(1) || '';
+    const [path, id] = hash.split('/');
+    const handler = this.routes[path] || this.routes[''];
+    if (handler) handler(id);
+    this.updateNavigation(path);
+  },
+
+  navigate(path) {
+    window.location.hash = path;
+  },
+
+  updateNavigation(currentPath) {
+    document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+    
+    if (currentPath === '' || currentPath === 'dashboard') {
+      document.getElementById('nav-dashboard').classList.add('active');
+    } else if (currentPath === 'list') {
+      document.getElementById('nav-list').classList.add('active');
+    }
+  }
+};
+
+const aiInsights = {
+  generateMonthlyReport(expenses) {
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    
+    const monthlyExpenses = expenses.filter(expense => {
+      const expenseDate = new Date(expense.date);
+      return expenseDate.getMonth() === currentMonth && expenseDate.getFullYear() === currentYear;
+    });
+
+    const total = monthlyExpenses.reduce((sum, expense) => sum + parseFloat(expense.amount), 0);
+    
+    const categoryTotals = {};
+    monthlyExpenses.forEach(expense => {
+      categoryTotals[expense.category] = (categoryTotals[expense.category] || 0) + parseFloat(expense.amount);
+    });
+
+    const topCategory = Object.entries(categoryTotals)
+      .sort(([,a], [,b]) => b - a)[0];
+
+    const insights = [];
+    
+    if (monthlyExpenses.length === 0) {
+      insights.push("No expenses recorded this month. Great job staying budget-conscious!");
+    } else {
+      insights.push(`This month you've spent $${total.toFixed(2)} across ${monthlyExpenses.length} transactions.`);
+      
+      if (topCategory) {
+        const percentage = ((topCategory[1] / total) * 100).toFixed(0);
+        insights.push(`Your biggest spending category is ${topCategory[0]} (${percentage}% of total spending).`);
+      }
+
+      if (total > 1000) {
+        insights.push("💡 Tip: Consider setting up budget alerts to track high-spending months.");
+      }
+
+      const avgPerDay = total / new Date().getDate();
+      insights.push(`You're averaging $${avgPerDay.toFixed(2)} per day this month.`);
+
+      if (categoryTotals.food && categoryTotals.food > total * 0.4) {
+        insights.push("🍕 Food expenses are high this month. Consider meal planning to reduce costs.");
+      }
+
+      if (Object.keys(categoryTotals).length === 1) {
+        insights.push("📊 All your expenses are in one category. Try categorizing for better insights.");
+      }
+    }
+
+    return {
+      total,
+      count: monthlyExpenses.length,
+      categories: categoryTotals,
+      insights
+    };
+  },
+
+  getSpendingTrend(expenses) {
+    const last30Days = expenses.filter(expense => {
+      const expenseDate = new Date(expense.date);
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      return expenseDate >= thirtyDaysAgo;
+    });
+
+    const weeklyTotals = {};
+    last30Days.forEach(expense => {
+      const week = Math.floor((Date.now() - new Date(expense.date).getTime()) / (7 * 24 * 60 * 60 * 1000));
+      weeklyTotals[week] = (weeklyTotals[week] || 0) + parseFloat(expense.amount);
+    });
+
+    return weeklyTotals;
+  }
+};
+
+function showDashboard() {
+  const expenses = store.getAll();
+  const report = aiInsights.generateMonthlyReport(expenses);
+  const monthName = new Date().toLocaleString('default', { month: 'long' });
+  
+  const categoryCards = Object.entries(report.categories)
+    .sort(([,a], [,b]) => b - a)
+    .map(([category, amount]) => `
+      <div class="bg-white p-4 rounded-lg border">
+        <div class="flex items-center justify-between">
+          <div>
+            <span class="category-badge category-${category}">${category}</span>
+          </div>
+          <div class="text-right">
+            <div class="text-lg font-semibold">$${amount.toFixed(2)}</div>
+            <div class="text-sm text-gray-500">${((amount / report.total) * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+      </div>
+    `).join('');
+
+  const html = `
+    <div class="animate-fadeIn">
+      <!-- Monthly Overview -->
+      <div class="mb-8">
+        <h2 class="text-2xl font-bold mb-4">${monthName} Overview</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div class="bg-white p-6 rounded-lg shadow-sm border">
+            <div class="flex items-center">
+              <div class="bg-blue-100 p-3 rounded-full mr-4">
+                <i data-lucide="dollar-sign" class="w-6 h-6 text-blue-600"></i>
+              </div>
+              <div>
+                <p class="text-sm text-gray-600">Total Spent</p>
+                <p class="text-2xl font-bold">$${report.total.toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-white p-6 rounded-lg shadow-sm border">
+            <div class="flex items-center">
+              <div class="bg-green-100 p-3 rounded-full mr-4">
+                <i data-lucide="trending-up" class="w-6 h-6 text-green-600"></i>
+              </div>
+              <div>
+                <p class="text-sm text-gray-600">Transactions</p>
+                <p class="text-2xl font-bold">${report.count}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-white p-6 rounded-lg shadow-sm border">
+            <div class="flex items-center">
+              <div class="bg-purple-100 p-3 rounded-full mr-4">
+                <i data-lucide="pie-chart" class="w-6 h-6 text-purple-600"></i>
+              </div>
+              <div>
+                <p class="text-sm text-gray-600">Categories</p>
+                <p class="text-2xl font-bold">${Object.keys(report.categories).length}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category Breakdown -->
+      ${Object.keys(report.categories).length > 0 ? `
+        <div class="mb-8">
+          <h3 class="text-lg font-semibold mb-4">Spending by Category</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            ${categoryCards}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- AI Insights -->
+      <div class="mb-8">
+        <h3 class="text-lg font-semibold mb-4 flex items-center">
+          <i data-lucide="brain" class="w-5 h-5 mr-2 text-blue-600"></i>
+          AI Insights
+        </h3>
+        <div class="insight-card">
+          <div class="space-y-3">
+            ${report.insights.map(insight => `
+              <div class="flex items-start space-x-2">
+                <i data-lucide="lightbulb" class="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0"></i>
+                <p class="text-sm text-blue-800">${insight}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="flex space-x-4">
+        <button onclick="router.navigate('new')" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>Add Expense</span>
+        </button>
+        <button onclick="router.navigate('list')" class="bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition-colors flex items-center space-x-2">
+          <i data-lucide="list" class="w-4 h-4"></i>
+          <span>View All</span>
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('app-content').innerHTML = html;
+  lucide.createIcons();
+}
+
+function showList() {
+  const expenses = store.getAll().sort((a, b) => new Date(b.date) - new Date(a.date));
+  
+  if (expenses.length === 0) {
+    const html = `
+      <div class="text-center py-12 animate-fadeIn">
+        <div class="bg-gray-100 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
+          <i data-lucide="receipt" class="w-8 h-8 text-gray-400"></i>
+        </div>
+        <h3 class="text-lg font-medium text-gray-900 mb-2">No expenses yet</h3>
+        <p class="text-gray-600 mb-6">Start tracking your expenses to get insights</p>
+        <button onclick="router.navigate('new')" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+          Add First Expense
+        </button>
+      </div>
+    `;
+    document.getElementById('app-content').innerHTML = html;
+    lucide.createIcons();
+    return;
+  }
+
+  const html = `
+    <div class="animate-fadeIn">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">All Expenses</h2>
+        <div class="flex items-center space-x-4">
+          <select id="category-filter" class="form-input w-auto" onchange="filterExpenses()">
+            <option value="">All Categories</option>
+            <option value="food">Food</option>
+            <option value="transport">Transport</option>
+            <option value="shopping">Shopping</option>
+            <option value="bills">Bills</option>
+            <option value="other">Other</option>
+          </select>
+          <input type="month" id="month-filter" class="form-input w-auto" onchange="filterExpenses()" />
+        </div>
+      </div>
+
+      <div id="expenses-list" class="space-y-4">
+        ${expenses.map(expense => createExpenseCard(expense)).join('')}
+      </div>
+    </div>
+  `;
+
+  document.getElementById('app-content').innerHTML = html;
+  
+  // Set current month as default filter
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  document.getElementById('month-filter').value = currentMonth;
+  
+  lucide.createIcons();
+}
+
+function createExpenseCard(expense) {
+  const date = new Date(expense.date).toLocaleDateString();
+  const amount = parseFloat(expense.amount).toFixed(2);
+  
+  return `
+    <div class="expense-card" data-category="${expense.category}" data-date="${expense.date}">
+      <div class="flex items-center justify-between">
+        <div class="flex-1">
+          <div class="flex items-center space-x-3 mb-2">
+            <span class="category-badge category-${expense.category}">${expense.category}</span>
+            <span class="text-sm text-gray-500">${date}</span>
+          </div>
+          <h3 class="font-semibold text-gray-900">${expense.description}</h3>
+          ${expense.notes ? `<p class="text-sm text-gray-600 mt-1">${expense.notes}</p>` : ''}
+        </div>
+        <div class="text-right ml-4">
+          <div class="text-xl font-bold text-gray-900">$${amount}</div>
+          <div class="flex space-x-1 mt-2">
+            <button onclick="router.navigate('edit/${expense.id}')" class="text-blue-600 hover:text-blue-800 p-1">
+              <i data-lucide="edit-2" class="w-4 h-4"></i>
+            </button>
+            <button onclick="deleteExpense('${expense.id}')" class="text-red-600 hover:text-red-800 p-1">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function filterExpenses() {
+  const categoryFilter = document.getElementById('category-filter').value;
+  const monthFilter = document.getElementById('month-filter').value;
+  const expenseCards = document.querySelectorAll('.expense-card');
+  
+  expenseCards.forEach(card => {
+    const category = card.dataset.category;
+    const date = card.dataset.date;
+    const monthMatch = !monthFilter || date.startsWith(monthFilter);
+    const categoryMatch = !categoryFilter || category === categoryFilter;
+    
+    if (monthMatch && categoryMatch) {
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+}
+
+function showForm(id = null) {
+  const isEdit = id !== null;
+  const expense = isEdit ? store.getById(id) : {};
+  
+  const html = `
+    <div class="animate-fadeIn">
+      <div class="max-w-2xl mx-auto">
+        <div class="mb-6">
+          <h2 class="text-2xl font-bold">${isEdit ? 'Edit Expense' : 'Add New Expense'}</h2>
+          <p class="text-gray-600">Fill in the details below</p>
+        </div>
+
+        <form id="expense-form" class="bg-white rounded-lg shadow-sm border p-6 space-y-6">
+          <div>
+            <label class="form-label" for="description">Description *</label>
+            <input 
+              type="text" 
+              id="description" 
+              name="description" 
+              class="form-input" 
+              value="${expense.description || ''}" 
+              placeholder="e.g., Lunch at restaurant"
+              required
+            />
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label class="form-label" for="amount">Amount *</label>
+              <div class="relative">
+                <span class="absolute left-3 top-2 text-gray-500">$</span>
+                <input 
+                  type="number" 
+                  id="amount" 
+                  name="amount" 
+                  class="form-input pl-8" 
+                  value="${expense.amount || ''}" 
+                  placeholder="0.00"
+                  step="0.01"
+                  min="0"
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label class="form-label" for="category">Category *</label>
+              <select id="category" name="category" class="form-input" required>
+                <option value="">Select category</option>
+                <option value="food" ${expense.category === 'food' ? 'selected' : ''}>Food</option>
+                <option value="transport" ${expense.category === 'transport' ? 'selected' : ''}>Transport</option>
+                <option value="shopping" ${expense.category === 'shopping' ? 'selected' : ''}>Shopping</option>
+                <option value="bills" ${expense.category === 'bills' ? 'selected' : ''}>Bills</option>
+                <option value="other" ${expense.category === 'other' ? 'selected' : ''}>Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="form-label" for="date">Date *</label>
+            <input 
+              type="date" 
+              id="date" 
+              name="date" 
+              class="form-input" 
+              value="${expense.date || new Date().toISOString().slice(0, 10)}" 
+              required
+            />
+          </div>
+
+          <div>
+            <label class="form-label" for="notes">Notes (optional)</label>
+            <textarea 
+              id="notes" 
+              name="notes" 
+              class="form-input" 
+              rows="3" 
+              placeholder="Additional details..."
+            >${expense.notes || ''}</textarea>
+          </div>
+
+          <div class="flex space-x-4 pt-4">
+            <button 
+              type="submit" 
+              class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2 flex-1"
+            >
+              <i data-lucide="save" class="w-4 h-4"></i>
+              <span>${isEdit ? 'Update' : 'Save'} Expense</span>
+            </button>
+            
+            ${isEdit ? `
+              <button 
+                type="button" 
+                onclick="deleteExpense('${id}')" 
+                class="bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center space-x-2"
+              >
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                <span>Delete</span>
+              </button>
+            ` : ''}
+            
+            <button 
+              type="button" 
+              onclick="router.navigate('list')" 
+              class="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg hover:bg-gray-300 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('app-content').innerHTML = html;
+  
+  // Setup form submission
+  document.getElementById('expense-form').onsubmit = (e) => {
+    e.preventDefault();
+    saveExpense(id);
+  };
+  
+  lucide.createIcons();
+}
+
+function saveExpense(id = null) {
+  const form = document.getElementById('expense-form');
+  const formData = new FormData(form);
+  
+  const expenseData = {
+    description: formData.get('description').trim(),
+    amount: parseFloat(formData.get('amount')),
+    category: formData.get('category'),
+    date: formData.get('date'),
+    notes: formData.get('notes').trim()
+  };
+
+  // Validation
+  if (!expenseData.description || !expenseData.amount || !expenseData.category || !expenseData.date) {
+    alert('Please fill in all required fields');
+    return;
+  }
+
+  if (expenseData.amount <= 0) {
+    alert('Amount must be greater than 0');
+    return;
+  }
+
+  showLoading(true);
+  
+  setTimeout(() => {
+    try {
+      if (id) {
+        store.update(id, expenseData);
+      } else {
+        store.create(expenseData);
+      }
+      
+      showLoading(false);
+      router.navigate('list');
+    } catch (error) {
+      showLoading(false);
+      alert('Error saving expense: ' + error.message);
+    }
+  }, 300);
+}
+
+function deleteExpense(id) {
+  const expense = store.getById(id);
+  if (!expense) return;
+  
+  if (confirm(`Are you sure you want to delete "${expense.description}"?\n\nThis action cannot be undone.`)) {
+    showLoading(true);
+    
+    setTimeout(() => {
+      store.delete(id);
+      showLoading(false);
+      
+      // If we're on the edit page, go back to list
+      if (window.location.hash.includes('edit')) {
+        router.navigate('list');
+      } else {
+        // Refresh current view
+        showList();
+      }
+    }, 300);
+  }
+}
+
+function showLoading(show) {
+  const loading = document.getElementById('loading');
+  if (show) {
+    loading.classList.remove('hidden');
+  } else {
+    loading.classList.add('hidden');
+  }
+}
+
+// Initialize app
+document.addEventListener('DOMContentLoaded', () => {
+  router.init({
+    '': showDashboard,
+    'dashboard': showDashboard,
+    'list': showList,
+    'new': () => showForm(),
+    'edit': (id) => showForm(id)
+  });
+  
+  lucide.createIcons();
+});
