@@ -1,0 +1,65 @@
+.nav-tab {
+  @apply px-4 py-3 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 flex items-center space-x-2 transition-colors border-b-2 border-transparent;
+}
+
+.nav-tab.active {
+  @apply text-blue-600 border-blue-600 bg-blue-50;
+}
+
+.expense-card {
+  @apply bg-white rounded-lg shadow-sm border p-4 hover:shadow-md transition-shadow;
+}
+
+.category-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.category-food {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.category-transport {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.category-shopping {
+  @apply bg-purple-100 text-purple-800;
+}
+
+.category-bills {
+  @apply bg-red-100 text-red-800;
+}
+
+.category-other {
+  @apply bg-gray-100 text-gray-800;
+}
+
+.form-input {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none;
+}
+
+.form-label {
+  @apply block text-sm font-medium text-gray-700 mb-1;
+}
+
+.insight-card {
+  @apply bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-4;
+}
+
+@keyframes fadeIn {
+  from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+to {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
