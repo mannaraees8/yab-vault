@@ -1,0 +1,10 @@
+{
+  "apps": {
+    "Build An Expense": {
+      "sharedWith": [],
+      "shareToken": "share_1770381256581_o7vpssacxql",
+      "permissions": "read",
+      "createdAt": "2026-02-06T12:34:17.264Z"
+    }
+  }
+}
