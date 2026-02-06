@@ -1,11 +1,4 @@
 {
-  "apps": [
-    {
-      "name": "Build An Expense",
-      "url": "https://mannaraees8.github.io/yab-vault/build-an-expense/",
-      "createdAt": "2026-02-06T12:05:49.071Z",
-      "description": "Expense Tracker"
-    }
-  ],
-  "lastSync": "2026-02-06T12:05:50.172Z"
+  "apps": [],
+  "lastSync": "2026-02-06T13:56:05.642Z"
 }
