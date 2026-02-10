@@ -1,13 +1,6 @@
 {
   "apps": [
     {
-      "name": "build-a-simple-inventory-management-1770705833349-t1yk",
-      "displayName": "Build A Simple Inventory Management 1770705833349 T1yk",
-      "url": "https://mannaraees8.github.io/yab-vault/build-a-simple-inventory-management-1770705833349-t1yk/",
-      "createdAt": "2026-02-10T07:51:51.753Z",
-      "description": "Inventory System"
-    },
-    {
       "name": "build-a-simple-inventory-management-1770743350405-onoo",
       "displayName": "test",
       "url": "https://mannaraees8.github.io/yab-vault/build-a-simple-inventory-management-1770743350405-onoo/",
@@ -15,5 +8,5 @@
       "description": "Inventory System"
     }
   ],
-  "lastSync": "2026-02-10T17:09:34.233Z"
+  "lastSync": "2026-02-10T17:09:59.138Z"
 }
