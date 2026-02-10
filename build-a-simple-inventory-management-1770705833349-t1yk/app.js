@@ -1,0 +1,368 @@
+// Store object with full API
+const store = {
+  key: 'build-a-simple-inventory-management_data',
+  repoPath: 'build-a-simple-inventory-management/data.json', // Path in yab-vault repo
+
+  // Get GitHub credentials - handles all sharing modes
+  // ⚠️ CRITICAL: Include EVERY line of this function - do not simplify!
+  getGitHubConfig() {
+    // Check if this is a shared app from URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareMode = urlParams.get('mode');
+    const shareOwner = urlParams.get('owner');
+    const shareToken = urlParams.get('share');
+
+    // SHARED DATA MODES: Use owner's GitHub for data access
+    if ((shareMode === 'read' || shareMode === 'write') && shareOwner && shareToken) {
+      // 🔐 Check for owner's token in URL hash (passed securely from share link)
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const ownerToken = hashParams.get('ownerToken');
+
+      if (ownerToken) {
+        // Store owner's token temporarily for this session (optional)
+        localStorage.setItem(`shared_${shareOwner}_token`, decodeURIComponent(ownerToken));
+
+        return {
+          token: decodeURIComponent(ownerToken),
+          owner: shareOwner,
+          readOnly: shareMode === 'read' // Only read-only if mode is 'read', writable if 'write'
+        };
+      }
+
+      // Fallback: check if token was stored in a previous session
+      const storedToken = localStorage.getItem(`shared_${shareOwner}_token`);
+      if (storedToken) {
+        return {
+          token: storedToken,
+          owner: shareOwner,
+          readOnly: shareMode === 'read'
+        };
+      }
+
+      // No token available - show error
+      alert('⚠️ Share link incomplete. Please ask the owner to generate a new share link.');
+      return null;
+    }
+
+    // OWN DATA MODE or regular app: Use current user's GitHub
+    const token = localStorage.getItem('github_token');
+    const owner = localStorage.getItem('github_owner');
+    return (token && owner) ? { token, owner, readOnly: false } : null;
+  },
+
+  // Load data from GitHub (REQUIRED - no localStorage fallback)
+  async getAll() {
+    const github = this.getGitHubConfig();
+
+    if (!github) {
+      alert('⚠️ GitHub not configured! Please connect your GitHub account in settings to use this app.');
+      return [];
+    }
+
+    try {
+      const url = `https://api.github.com/repos/${github.owner}/yab-vault/contents/${this.repoPath}`;
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${github.token}`,
+          Accept: 'application/vnd.github.v3+json'
+        }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const content = atob(data.content);
+        const items = JSON.parse(content);
+
+        // Cache to localStorage for reference only
+        localStorage.setItem(this.key, JSON.stringify(items));
+        return items;
+      }
+
+      if (res.status === 404) {
+        // Data file doesn't exist yet - return empty array
+        console.log('Data file not found, starting fresh');
+        return [];
+      }
+
+      throw new Error(`Failed to load data: HTTP ${res.status}`);
+    } catch (e) {
+      console.error('Failed to load from GitHub:', e);
+      alert(`❌ Failed to load data from GitHub: ${e.message}\n\nPlease check your internet connection and GitHub credentials.`);
+      return [];
+    }
+  },
+
+  // Save data to GitHub (REQUIRED - will throw error if fails)
+  async save(items) {
+    const github = this.getGitHubConfig();
+
+    // Check if this is read-only shared data mode
+    if (github && github.readOnly) {
+      alert('⚠️ This is a shared app with read-only access. You cannot modify the owner\'s data.');
+      throw new Error('Read-only access - cannot save data');
+    }
+
+    if (!github) {
+      alert('⚠️ GitHub not configured! Please connect your GitHub account in settings to save data.');
+      throw new Error('GitHub not configured');
+    }
+
+    try {
+      const url = `https://api.github.com/repos/${github.owner}/yab-vault/contents/${this.repoPath}`;
+
+      // Get current file SHA
+      let sha;
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${github.token}`,
+            Accept: 'application/vnd.github.v3+json'
+          }
+        });
+        if (res.ok) sha = (await res.json()).sha;
+      } catch (e) {
+        // File might not exist yet, that's okay
+      }
+
+      // Upload to GitHub
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${github.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/vnd.github.v3+json'
+        },
+        body: JSON.stringify({
+          message: 'Update data from app',
+          content: btoa(JSON.stringify(items, null, 2)),
+          sha
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+
+        // Handle conflict (409): Someone else modified the data
+        if (response.status === 409) {
+          const shouldRefresh = confirm(
+            '⚠️ CONFLICT DETECTED\n\n' +
+            'Someone else modified this data while you were editing.\n\n' +
+            'Click OK to refresh and see their changes (YOUR CHANGES WILL BE LOST).\n' +
+            'Click Cancel to keep editing (you\'ll need to save again).'
+          );
+
+          if (shouldRefresh) {
+            window.location.reload();
+          }
+          throw new Error('Data conflict - please refresh and try again');
+        }
+
+        throw new Error(`GitHub API error: ${errorData.message || response.statusText}`);
+      }
+
+      // Cache to localStorage only AFTER successful GitHub save
+      localStorage.setItem(this.key, JSON.stringify(items));
+      console.log('✅ Data saved to GitHub successfully');
+    } catch (e) {
+      console.error('Failed to save to GitHub:', e);
+      alert(`❌ Failed to save data to GitHub!\n\nError: ${e.message}\n\nYour changes were NOT saved. Please check your internet connection and GitHub credentials.`);
+      throw e; // Re-throw to prevent the operation from appearing successful
+    }
+  },
+
+  async create(item) {
+    const items = await this.getAll();
+    item.id = Date.now().toString();
+    item.createdAt = new Date().toISOString();
+    items.push(item);
+    await this.save(items);
+    return item;
+  },
+
+  async update(id, updates) {
+    const items = await this.getAll();
+    const index = items.findIndex(i => i.id === id);
+    if (index !== -1) {
+      items[index] = { ...items[index], ...updates, updatedAt: new Date().toISOString() };
+      await this.save(items);
+    }
+  },
+
+  async delete(id) {
+    const items = await this.getAll();
+    const filtered = items.filter(i => i.id !== id);
+    await this.save(filtered);
+  }
+};
+
+// Router setup
+const router = {
+  routes: {},
+
+  init(routes) {
+    this.routes = routes;
+    window.addEventListener('hashchange', () => this.route());
+    this.route();
+  },
+
+  route() {
+    const hash = window.location.hash.slice(1) || '';
+    const [path, id] = hash.split('/');
+    const handler = this.routes[path] || this.routes[''];
+    if (handler) handler(id);
+  },
+
+  navigate(path) {
+    window.location.hash = path;
+  }
+};
+
+// View rendering functions
+async function showList() {
+  const items = await store.getAll();
+  let html = '';
+  if (items.length === 0) {
+    html = `<div class='flex flex-col items-center justify-center py-16 px-4 text-center'>
+      <div class='w-20 h-20 rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center mb-4'>
+        <i data-lucide='inbox' class='w-10 h-10 text-blue-600'></i>
+      </div>
+      <h3 class='text-xl font-semibold text-slate-900 mb-2'>No items yet</h3>
+      <p class='text-slate-600 mb-6 max-w-sm'>Get started by creating your first item</p>
+      <button onclick='router.navigate("new")' class='bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl shadow-lg hover:shadow-xl transition-all'>
+        <i data-lucide='plus' class='w-5 h-5 inline mr-2'></i>
+        Create First Item
+      </button>
+    </div>`;
+  } else {
+    html = `<div class='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'>
+      ${items.map(item => `
+      <div class='bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6 hover:shadow-xl transition-all duration-300 cursor-pointer' onclick='router.navigate("edit/${item.id}")'>
+        <img src='${item.image}' alt='${item.name}' class='w-full h-32 object-cover rounded-lg mb-4'>
+        <h3 class='font-semibold text-slate-900 text-lg'>${item.name}</h3>
+        <p class='text-slate-500 text-sm mb-2'>${item.description || 'No description'}</p>
+        <p class='text-slate-700 font-medium mb-2'>Quantity: ${item.quantity}</p>
+        <p class='text-slate-500 text-sm'>Category: ${item.category}</p>
+      </div>`).join('')}
+    </div>`;
+  }
+  document.getElementById('app-content').innerHTML = html;
+  lucide.createIcons();
+}
+
+async function showForm(id) {
+  let item = { name: '', description: '', quantity: 0, category: 'other', image: '' };
+  if (id) {
+    const items = await store.getAll();
+    item = items.find(i => i.id === id) || item;
+  }
+
+  const html = `<form id='item-form' class='space-y-4'>
+    <div>
+      <label class='block text-sm font-semibold text-slate-700 mb-2'>Item Name</label>
+      <input type='text' name='name' value='${item.name}' required
+        class='w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none' placeholder='Enter item name'>
+    </div>
+    <div>
+      <label class='block text-sm font-semibold text-slate-700 mb-2'>Description</label>
+      <textarea name='description' class='w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none' placeholder='Enter description'>${item.description}</textarea>
+    </div>
+    <div>
+      <label class='block text-sm font-semibold text-slate-700 mb-2'>Quantity</label>
+      <input type='number' name='quantity' value='${item.quantity}' required min='0'
+        class='w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none'>
+    </div>
+    <div>
+      <label class='block text-sm font-semibold text-slate-700 mb-2'>Category</label>
+      <select name='category' class='w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-900 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none'>
+        <option value='electronics' ${item.category === 'electronics' ? 'selected' : ''}>Electronics</option>
+        <option value='furniture' ${item.category === 'furniture' ? 'selected' : ''}>Furniture</option>
+        <option value='clothing' ${item.category === 'clothing' ? 'selected' : ''}>Clothing</option>
+        <option value='other' ${item.category === 'other' ? 'selected' : ''}>Other</option>
+      </select>
+    </div>
+    <div>
+      <label class='block text-sm font-semibold text-slate-700 mb-2'>Image</label>
+      <input type='file' name='image' accept='image/*' ${id ? '' : 'required'}
+        class='w-full px-4 py-3 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-900 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 transition-all outline-none'>
+      ${item.image ? `<img src='${item.image}' alt='Current Item Image' class='mt-4 w-32 h-32 object-cover rounded-lg'>` : ''}
+    </div>
+    <div class='flex gap-4'>
+      <button type='submit' class='bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3 rounded-xl shadow-lg hover:shadow-xl transition-all'>
+        ${id ? 'Update' : 'Save'}
+      </button>
+      <button type='button' onclick='router.navigate("")' class='bg-slate-100 text-slate-700 px-6 py-3 rounded-xl hover:bg-slate-200 transition-colors font-medium'>Cancel</button>
+      ${id ? `<button type='button' onclick='confirmDelete("${id}")' class='bg-gradient-to-r from-red-600 to-rose-600 text-white px-4 py-2 rounded-lg hover:shadow-lg transition-all'>Delete</button>` : ''}
+    </div>
+  </form>`;
+
+  document.getElementById('app-content').innerHTML = html;
+
+  document.getElementById('item-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const data = Object.fromEntries(formData.entries());
+
+    if (formData.get('image').size > 0) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        data.image = event.target.result;
+        if (id) {
+          await store.update(id, data);
+        } else {
+          await store.create(data);
+        }
+        router.navigate('');
+      };
+      reader.readAsDataURL(formData.get('image'));
+    } else {
+      if (id) await store.update(id, data);
+      router.navigate('');
+    }
+  };
+
+  lucide.createIcons();
+}
+
+function confirmDelete(id) {
+  const confirmed = confirm('Are you sure you want to delete this item?');
+  if (confirmed) {
+    store.delete(id).then(() => router.navigate(''));
+  }
+}
+
+// Application initialization
+
+document.addEventListener('DOMContentLoaded', () => {
+  // 🔐 Auto-receive GitHub tokens from YAB Dashboard or Share Links (via URL hash)
+  const hashParams = new URLSearchParams(window.location.hash.slice(1));
+  const autoToken = hashParams.get('token');
+  const autoOwner = hashParams.get('owner');
+  const ownerToken = hashParams.get('ownerToken');
+
+  // Option 1: Auto-configure from YAB Dashboard (your own apps)
+  if (autoToken && autoOwner) {
+    if (!localStorage.getItem('github_token')) {
+      localStorage.setItem('github_token', decodeURIComponent(autoToken));
+      localStorage.setItem('github_owner', decodeURIComponent(autoOwner));
+      console.log('✅ GitHub credentials auto-configured from YAB Dashboard');
+    }
+  }
+
+  // Option 2: Receive owner's token from share link (read/write modes)
+  // The token is extracted and stored in getGitHubConfig(), but we clear it here for security
+  if (ownerToken) {
+    console.log('✅ Received owner token from share link');
+  }
+
+  // Clear all tokens from URL hash for security
+  if (autoToken || ownerToken) {
+    window.location.hash = '';
+  }
+
+  router.init({
+    '': showList,
+    'new': () => showForm(),
+    'edit': (id) => showForm(id)
+  });
+  lucide.createIcons();
+});
