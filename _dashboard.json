@@ -1,4 +1,12 @@
 {
-  "apps": [],
-  "lastSync": "2026-02-06T13:56:05.642Z"
+  "apps": [
+    {
+      "name": "build-a-simple-inventory-management-1770705833349-t1yk",
+      "displayName": "Build A Simple Inventory Management 1770705833349 T1yk",
+      "url": "https://mannaraees8.github.io/yab-vault/build-a-simple-inventory-management-1770705833349-t1yk/",
+      "createdAt": "2026-02-10T07:51:51.753Z",
+      "description": "Inventory System"
+    }
+  ],
+  "lastSync": "2026-02-10T07:51:53.149Z"
 }
